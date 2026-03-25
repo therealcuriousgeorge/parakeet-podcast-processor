@@ -15,6 +15,20 @@ try:
 except ImportError:
     OLLAMA_AVAILABLE = False
 
+# Optional Anthropic support
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+# Optional Gemini support
+try:
+    from google import genai as google_genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 
 class TranscriptCleaner:
     def __init__(self, db: P3Database, llm_provider: str = "openai", 
@@ -28,10 +42,12 @@ class TranscriptCleaner:
         # Load API key from environment if not provided
         if not self.api_key and self.llm_provider != "ollama":
             import os
-            if self.llm_provider == "openai":
-                self.api_key = os.getenv("OPENAI_API_KEY")
-            elif self.llm_provider == "anthropic":
-                self.api_key = os.getenv("ANTHROPIC_API_KEY")
+            key_map = {
+                "openai": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "gemini": "GEMINI_API_KEY",
+            }
+            self.api_key = os.getenv(key_map.get(self.llm_provider, ""))
 
     def clean_transcript(self, raw_text: str) -> str:
         """Clean transcript by removing filler words and improving readability."""
@@ -67,6 +83,8 @@ class TranscriptCleaner:
             return self._anthropic_clean(text)
         elif self.llm_provider == "ollama":
             return self._ollama_clean(text)
+        elif self.llm_provider == "gemini":
+            return self._gemini_clean(text)
         else:
             print(f"Unsupported LLM provider: {self.llm_provider}")
             return text
@@ -110,9 +128,34 @@ Transcript:
 
     def _anthropic_clean(self, text: str) -> str:
         """Clean transcript using Anthropic Claude API."""
-        # Similar implementation for Claude
-        # This would use the Anthropic API format
-        return text  # Placeholder
+        if not ANTHROPIC_AVAILABLE:
+            print("anthropic package not installed. Run: pip install anthropic")
+            return text
+
+        prompt = """Clean this podcast transcript by:
+1. Removing filler words (um, uh, like, you know)
+2. Fixing grammar and punctuation
+3. Preserving technical terms and proper nouns exactly
+4. Maintaining the speaker's voice and meaning
+5. Breaking into clear paragraphs
+
+Return only the cleaned text, no additional commentary.
+
+Transcript:
+""" + text
+
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key)
+            message = client.messages.create(
+                model=self.llm_model,
+                max_tokens=min(len(text) * 2, 4096),
+                system="You are an expert transcript editor.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text.strip()
+        except Exception as e:
+            print(f"Anthropic cleaning failed: {e}")
+            return text
 
     def _ollama_clean(self, text: str) -> str:
         """Clean transcript using Ollama local LLM."""
@@ -205,14 +248,20 @@ Transcript:
         
         try:
             if self.llm_provider == "openai":
-                return self._openai_extract(prompt + text)
+                result = self._openai_extract(prompt + text)
             elif self.llm_provider == "anthropic":
-                return self._anthropic_extract(prompt + text)
+                result = self._anthropic_extract(prompt + text)
             elif self.llm_provider == "ollama":
-                return self._ollama_extract(prompt + text)
+                result = self._ollama_extract(prompt + text)
+            elif self.llm_provider == "gemini":
+                result = self._gemini_extract(prompt + text)
+            else:
+                result = None
         except Exception as e:
             print(f"LLM summarization failed: {e}")
-            return self._basic_extraction(text)
+            result = None
+
+        return result if result is not None else self._basic_extraction(text)
 
     def _openai_extract(self, prompt: str) -> Optional[Dict[str, Any]]:
         """Extract using OpenAI API."""
@@ -246,9 +295,28 @@ Transcript:
         return None
 
     def _anthropic_extract(self, prompt: str) -> Optional[Dict[str, Any]]:
-        """Extract using Anthropic Claude API."""
-        # Placeholder for Claude implementation
-        return None
+        """Extract structured data using Anthropic Claude API."""
+        if not ANTHROPIC_AVAILABLE:
+            print("anthropic package not installed. Run: pip install anthropic")
+            return None
+
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key)
+            message = client.messages.create(
+                model=self.llm_model,
+                max_tokens=1024,
+                system="You are an expert at analyzing podcast content. Return valid JSON only.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            content = message.content[0].text.strip()
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                return json.loads(content[json_start:json_end])
+            return None
+        except Exception as e:
+            print(f"Anthropic extraction failed: {e}")
+            return None
 
     def _ollama_extract(self, prompt: str) -> Optional[Dict[str, Any]]:
         """Extract structured data using Ollama."""
@@ -276,6 +344,57 @@ Transcript:
             return None
         except Exception as e:
             print(f"Ollama extraction failed: {e}")
+            return None
+
+    def _gemini_clean(self, text: str) -> str:
+        """Clean transcript using Google Gemini API."""
+        if not GEMINI_AVAILABLE:
+            print("google-genai package not installed. Run: pip install google-genai")
+            return text
+
+        prompt = """Clean this podcast transcript by:
+1. Removing filler words (um, uh, like, you know)
+2. Fixing grammar and punctuation
+3. Preserving technical terms and proper nouns exactly
+4. Maintaining the speaker's voice and meaning
+5. Breaking into clear paragraphs
+
+Return only the cleaned text, no additional commentary.
+
+Transcript:
+""" + text
+
+        try:
+            client = google_genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self.llm_model,
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e:
+            print(f"Gemini cleaning failed: {e}")
+            return text
+
+    def _gemini_extract(self, prompt: str) -> Optional[Dict[str, Any]]:
+        """Extract structured data using Google Gemini API."""
+        if not GEMINI_AVAILABLE:
+            print("google-genai package not installed. Run: pip install google-genai")
+            return None
+
+        try:
+            client = google_genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self.llm_model,
+                contents=prompt,
+            )
+            content = response.text.strip()
+            json_start = content.find('{')
+            json_end = content.rfind('}') + 1
+            if json_start >= 0 and json_end > json_start:
+                return json.loads(content[json_start:json_end])
+            return None
+        except Exception as e:
+            print(f"Gemini extraction failed: {e}")
             return None
 
     def _basic_extraction(self, text: str) -> Dict[str, Any]:

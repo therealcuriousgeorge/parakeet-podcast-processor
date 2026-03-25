@@ -1,101 +1,137 @@
 # Parakeet Podcast Processor (P³)
 
-**Automated podcast processing with Apple Silicon optimization and local LLMs**
+**Automated podcast processing — local or cloud, your choice**
 
-Transform podcasts into structured summaries using cutting-edge Apple Silicon ML acceleration.
+Transform podcasts into structured summaries, daily digests, and blog posts. Works fully offline with local models, or connects to OpenAI, Anthropic, or Google Gemini when you want cloud quality.
 
 > **Inspired by [Tomasz Tunguz](https://tomtunguz.com)**'s innovative podcast processing system described in his "How I AI" interview. This implementation builds on his pioneering work in automated podcast analysis for venture capital and business intelligence.
 
-## ⚡ Key Features
+## Features
 
-- **🎧 Smart Audio Processing**: RSS feed monitoring + ffmpeg normalization
-- **🚀 Lightning Fast Transcription**: Parakeet MLX (30x faster than Whisper on Apple Silicon)
-- **🧠 Local LLM Analysis**: Ollama integration for structured summarization
-- **✍️ AI Blog Generation**: Iterative writing with AP English teacher grading system
-- **📱 Social Media Posts**: Auto-generate Twitter and LinkedIn content
-- **💾 Efficient Storage**: DuckDB for fast queries and analysis
-- **📊 Rich Outputs**: Markdown and JSON exports with topics, themes, quotes, and company mentions
-- **🔒 100% Local**: No API keys required, complete privacy
+- **Smart Audio Processing** — RSS feed monitoring + ffmpeg normalization
+- **Flexible Transcription** — Parakeet MLX (Apple Silicon), local Whisper, or OpenAI Whisper API
+- **Choice of LLM** — Ollama (local), OpenAI, Anthropic/Claude, or Google Gemini
+- **AI Blog Generation** — Iterative writing with AP English teacher grading system
+- **Social Media Posts** — Auto-generate Twitter and LinkedIn content
+- **Efficient Storage** — DuckDB for fast queries and analysis
+- **Rich Outputs** — Markdown and JSON exports with topics, themes, quotes, and company mentions
 
-## 🚦 Quick Start
+## Quick Start
 
 ```bash
-# Prerequisites: macOS with Apple Silicon + ffmpeg + Ollama
+# Prerequisites: ffmpeg (always required)
 brew install ffmpeg
-# Install Ollama from https://ollama.com, then: ollama pull llama3.2
 
-# Setup P³
+# For local transcription on Apple Silicon (optional):
+# Parakeet MLX is auto-installed as a dependency
+
+# For local LLM summarization (optional):
+# Install Ollama from https://ollama.com, then pull a model:
+ollama pull gemma3:12b
+
+# Install P³
 python3 -m venv venv && source venv/bin/activate
 pip install -e .
-p3 init
 
-# Configure feeds in config/feeds.yaml
-# Then run the complete pipeline:
+# Interactive setup — choose your transcription and LLM providers:
+p3 init
+```
+
+`p3 init` walks you through provider selection:
+
+```
+Step 1 — Transcription  (audio → text)
+  local-parakeet  Apple Silicon only · fastest · fully offline
+  local-whisper   Any machine · fully offline · slower
+  openai-api      Cloud · ~$0.006/min · no GPU needed
+
+Step 2 — LLM Provider  (transcript → summary + blog)
+  ollama     Fully local · free · requires Ollama running
+  openai     GPT-4o-mini / GPT-4o
+  anthropic  Claude Haiku / Sonnet
+  gemini     Gemini Flash / Pro
+```
+
+Then run the pipeline:
+
+```bash
+# Add your RSS feeds to config/feeds.yaml, then:
 p3 fetch && p3 transcribe && p3 digest && p3 export
 
-# Generate blog posts from digest (Tunguz's innovation):
+# Generate a blog post from the digest:
 p3 write --topic "AI's Impact on Software Development"
-
-# Or run the demo script:
-python demo.py
 ```
 
-## ⚡ Performance
+## Provider Options
 
-- **Audio Download**: ~30 seconds per episode
-- **Parakeet Transcription**: 60 minutes audio → 1 second processing 
-- **Ollama Analysis**: Full transcript → structured summary in ~10 seconds
-- **Total Pipeline**: ~1 minute for complete podcast processing
+### Transcription (audio → text)
 
-## 🏗️ Architecture
+| Provider | How to use | Notes |
+|----------|-----------|-------|
+| `local-parakeet` | Default on Apple Silicon | 30x faster than Whisper, fully offline |
+| `local-whisper` | Any machine | Offline, models: tiny/base/small/medium/large |
+| `openai-api` | Set `OPENAI_API_KEY` | Cloud, ~$0.006/min, no GPU needed |
+
+### LLM Summarization & Blog Writing (transcript → insights)
+
+| Provider | How to use | Suggested model |
+|----------|-----------|-----------------|
+| `ollama` | Run `ollama serve` + pull model | `gemma3:12b`, `llama3.2` |
+| `openai` | Set `OPENAI_API_KEY` | `gpt-4o-mini`, `gpt-4o` |
+| `anthropic` | Set `ANTHROPIC_API_KEY` | `claude-3-5-haiku-20241022`, `claude-3-7-sonnet-20250219` |
+| `gemini` | Set `GEMINI_API_KEY` | `gemini-2.0-flash`, `gemini-1.5-pro` |
+
+API keys are read from environment variables — never stored in config files.
+
+## Architecture
 
 ```
-RSS → ffmpeg → Parakeet MLX → Ollama → DuckDB → Export
+RSS Feeds (feeds.yaml)
+    │
+    ▼
+[downloader]   feedparser → HTTP download → ffmpeg normalize → data/audio/
+    │
+    ▼
+[transcriber]  local-parakeet | local-whisper | openai-api
+    │
+    ▼
+[cleaner]      ollama | openai | anthropic | gemini  →  structured JSON summary
+    │
+    ▼
+[exporter]     Markdown + JSON digest files
+    │
+    ▼
+[writer]       ollama | openai | anthropic | gemini  →  blog post + social copy
 ```
 
-**Optimized Stack:**
-- **Audio**: ffmpeg normalization for consistent quality
-- **Transcription**: Parakeet MLX (Apple Silicon optimized ASR)  
-- **Analysis**: Ollama (local Llama3.2 for structured extraction)
-- **Storage**: DuckDB (fast analytical queries)
+**Storage:** DuckDB (embedded, no server) — tables for `podcasts`, `episodes`, `transcripts`, `summaries`
 
-## 📊 Output Example
+**Status machine:** `downloaded → transcribed → processed`
 
-**Generated Markdown Digest:**
-```markdown
-# Podcast Digest - 2025-08-25
+## Performance (Apple Silicon, fully local)
 
-## Test Podcast
+| Step | Time |
+|------|------|
+| Audio download | ~30 sec/episode |
+| Parakeet transcription | 60 min audio → ~1 sec |
+| Ollama summarization | ~10 sec/episode |
+| Total pipeline | ~1 min end-to-end |
 
-### All About That Bass
+## Commands
 
-**Summary:** The Roland TR-808 drum machine revolutionized hip-hop and electronic music...
+| Command | Description |
+|---------|-------------|
+| `p3 init` | Interactive setup — choose providers, write config, create directories |
+| `p3 fetch` | Download new episodes from configured RSS feeds |
+| `p3 transcribe` | Convert audio to text using configured transcription provider |
+| `p3 digest` | Generate structured summaries using configured LLM |
+| `p3 export [--date YYYY-MM-DD]` | Export digest as Markdown and/or JSON — files named `YYYY-MM-DD_PodcastName.md` |
+| `p3 write --topic "..."` | Generate blog post with AP English grading loop |
+| `p3 status` | Show episode counts by pipeline stage |
 
-**Key Topics:**
-- Roland TR-808 drum machine  
-- Hip-hop music evolution
-- Electronic music production
+## Configuration
 
-**Notable Quotes:**
-> "I really feel the 808 kick drum was one of the first things that started shattering the rules..."
-
-**Companies Mentioned:**
-- Roland Corporation
-```
-
-## 🛠️ Commands
-
-- `p3 init` - Initialize directories and database
-- `p3 fetch` - Download episodes from RSS feeds
-- `p3 transcribe` - Convert audio to text with Parakeet MLX
-- `p3 digest` - Generate structured summaries with Ollama
-- `p3 export` - Export daily digests (markdown/JSON)
-- `p3 write --topic "Your Topic"` - Generate blog posts with AP English grading
-- `p3 status` - Show processing pipeline status
-
-## 🔧 Configuration
-
-Edit `config/feeds.yaml` to add your podcast feeds:
+`config/feeds.yaml` is generated by `p3 init`. You can also edit it directly:
 
 ```yaml
 feeds:
@@ -105,55 +141,114 @@ feeds:
 
 settings:
   max_episodes_per_feed: 5
-  
-  # Transcription (Apple Silicon optimized)
-  parakeet_enabled: true
+
+  # Transcription — choose one:
+  # local-parakeet (Apple Silicon), local-whisper, openai-api
+  transcription_provider: "local-parakeet"
   parakeet_model: "mlx-community/parakeet-tdt-0.6b-v2"
-  
-  # LLM Processing (100% Local)
-  llm_provider: "ollama"
-  llm_model: "llama3.2:latest"
+  whisper_model: "base"           # used when provider is local-whisper
+
+  # LLM — choose one:
+  # ollama, openai, anthropic, gemini
+  llm_provider: "anthropic"
+  llm_model: "claude-3-5-haiku-20241022"
+  ollama_base_url: "http://localhost:11434"
+
+  export_format: ["markdown", "json"]
 ```
 
-## 📂 Project Structure
+### API Key Setup
 
-```
-p3/
-├── p3/                    # Core package
-│   ├── database.py        # DuckDB storage layer
-│   ├── downloader.py      # RSS + audio download with ffmpeg
-│   ├── transcriber.py     # Parakeet MLX + Whisper fallback
-│   ├── cleaner.py         # Ollama LLM analysis
-│   ├── exporter.py        # Markdown/JSON generation
-│   └── cli.py             # Command-line interface
-├── config/feeds.yaml      # Podcast feed configuration
-├── data/                  # Audio files + DuckDB database
-├── exports/               # Generated digests
-├── digest_YYYY-MM-DD.md   # Generated markdown digests
-└── digest_YYYY-MM-DD.json # Generated JSON digests
+```bash
+# OpenAI (transcription or LLM)
+export OPENAI_API_KEY="sk-..."
+
+# Anthropic / Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Google Gemini
+export GEMINI_API_KEY="AIza..."
 ```
 
-## 🚀 Why P³?
+Add these to your shell profile (`.zshrc`, `.bashrc`) to persist across sessions.
 
-**Performance**: Parakeet MLX delivers 30x speed improvement over Whisper on Apple Silicon
+## Output Example
 
-**Privacy**: 100% local processing - your podcast data never leaves your machine
+Exports are saved as `YYYY-MM-DD_PodcastName.md` (and `.json`). With multiple feeds the names are joined: `2026-03-24_Stratechery_Lex-Fridman.md`.
 
-**Quality**: State-of-the-art ASR + structured LLM analysis produces rich, actionable summaries
+```markdown
+# Podcast Digest - 2026-03-24
 
-**Efficiency**: Process hours of podcasts in minutes with optimized pipeline
+## Stratechery
 
-Perfect for researchers, journalists, content creators, or anyone who needs to efficiently process large volumes of podcast content.
+### Episode Title
 
-## 🙏 **Attribution**
+**Summary:** ...
 
-This implementation is inspired by and builds upon the innovative work of **[Tomasz Tunguz](https://tomtunguz.com)**, founder of Theory Ventures, who pioneered many of these techniques for automated podcast analysis in venture capital. His "AP English teacher grading system" for iterative AI writing and multi-feed podcast processing approach formed the foundation for several features in this system.
+**Key Topics:**
+- AI infrastructure
+- Vector databases
 
-**Key innovations from Tunguz's system:**
-- ✍️ Blog post generation with AP English teacher grading (91/100 target)
-- 🔄 Iterative writing improvement loops  
-- 📱 Social media post generation
-- 🏢 Company/startup extraction for CRM integration
-- 📊 Investment thesis generation from podcast insights
+**Notable Quotes:**
+> "The infrastructure layer is where the real value accrues..."
+
+**Companies Mentioned:**
+- Pinecone, Weaviate
+```
+
+## Testing
+
+The test suite uses `pytest` with no external service dependencies — all LLM and API calls are mocked.
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run all tests
+pytest tests/ -v
+
+# Run a single module
+pytest tests/test_database.py -v
+```
+
+**85 tests across 4 modules — all passing:**
+
+| Module | Tests | What's covered |
+|--------|-------|----------------|
+| `test_database.py` | 11 | DuckDB CRUD for podcasts, episodes, transcripts, summaries; status transitions; date filtering |
+| `test_cleaner.py` | 18 | Filler-word regex, basic fallback extraction, JSON parsing from LLM responses, all 4 provider dispatch paths, API key env loading |
+| `test_transcriber.py` | 16 | Provider routing (parakeet / whisper / openai-api), legacy config compatibility, status on success/failure, SRT/JSON/txt export, timestamp conversion |
+| `test_exporter.py` | 17 | Markdown structure, JSON validity, HTML structure, empty-data edge cases, multi-podcast grouping |
+| `test_writer.py` | 23 | Slug generation, AP grade parsing, all 4 provider dispatch paths, API key loading, grade-loop iteration logic, file save and frontmatter |
+
+## Project Structure
+
+```
+parakeet-podcast-processor/
+├── p3/
+│   ├── cli.py          # Click commands — init, fetch, transcribe, digest, export, write, status
+│   ├── database.py     # DuckDB storage layer
+│   ├── downloader.py   # RSS parsing + audio download + ffmpeg normalization
+│   ├── transcriber.py  # Parakeet MLX · local Whisper · OpenAI Whisper API
+│   ├── cleaner.py      # LLM transcript cleaning + structured summarization
+│   ├── exporter.py     # Markdown / JSON / HTML digest generation
+│   └── writer.py       # Blog post generation with AP English grading loop
+├── config/
+│   ├── feeds.yaml          # Your config (generated by p3 init)
+│   └── feeds.yaml.example  # Reference with all options documented
+├── data/               # Audio files + p3.duckdb (git-ignored)
+├── blog_posts/         # Generated blog posts
+└── exports/            # Digest exports
+```
+
+## Attribution
+
+This implementation is inspired by and builds upon the innovative work of **[Tomasz Tunguz](https://tomtunguz.com)**, founder of Theory Ventures, who pioneered many of these techniques for automated podcast analysis in venture capital. His "AP English teacher grading system" for iterative AI writing formed the foundation for the `p3 write` command.
+
+Key innovations from Tunguz's system:
+- Blog post generation with AP English teacher grading (91/100 target score)
+- Iterative writing improvement loops
+- Social media post generation
+- Company/startup extraction for CRM integration
 
 *Source: Tomasz Tunguz interview on "How I AI" podcast*

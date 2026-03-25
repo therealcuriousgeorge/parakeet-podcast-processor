@@ -5,6 +5,7 @@ with iterative grading and improvement loops.
 """
 
 import json
+import os
 import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -12,22 +13,46 @@ from pathlib import Path
 
 from .database import P3Database
 
-# Optional Ollama support for blog generation
 try:
     import ollama
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
 
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+try:
+    from google import genai as google_genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 
 class BlogWriter:
-    def __init__(self, db: P3Database, llm_provider: str = "ollama", 
+    def __init__(self, db: P3Database, llm_provider: str = "ollama",
                  llm_model: str = "llama3.2:latest", target_grade: float = 91.0):
         self.db = db
         self.llm_provider = llm_provider.lower()
         self.llm_model = llm_model
         self.target_grade = target_grade
         self.max_iterations = 3
+
+        key_map = {
+            "openai": "OPENAI_API_KEY",
+            "anthropic": "ANTHROPIC_API_KEY",
+            "gemini": "GEMINI_API_KEY",
+        }
+        self.api_key = os.getenv(key_map.get(self.llm_provider, ""))
         
     def generate_blog_post_from_digest(self, topic: str, digest_data: Dict[str, Any], 
                                      context_posts: List[str] = None) -> Dict[str, Any]:
@@ -221,10 +246,21 @@ class BlogWriter:
         return slug.strip('-')
     
     def _generate_with_llm(self, prompt: str) -> str:
-        """Generate text using configured LLM."""
+        """Dispatch to the configured LLM provider."""
+        if self.llm_provider == "ollama":
+            return self._generate_ollama(prompt)
+        elif self.llm_provider == "openai":
+            return self._generate_openai(prompt)
+        elif self.llm_provider == "anthropic":
+            return self._generate_anthropic(prompt)
+        elif self.llm_provider == "gemini":
+            return self._generate_gemini(prompt)
+        else:
+            return f"Error: unsupported LLM provider '{self.llm_provider}'"
+
+    def _generate_ollama(self, prompt: str) -> str:
         if not OLLAMA_AVAILABLE:
-            return "Error: Ollama not available for blog generation"
-        
+            return "Error: ollama package not installed. Run: pip install ollama"
         try:
             response = ollama.chat(
                 model=self.llm_model,
@@ -234,6 +270,51 @@ class BlogWriter:
                 ]
             )
             return response['message']['content'].strip()
+        except Exception as e:
+            return f"Error generating content: {e}"
+
+    def _generate_openai(self, prompt: str) -> str:
+        if not OPENAI_AVAILABLE:
+            return "Error: openai package not installed. Run: pip install openai"
+        try:
+            client = OpenAI(api_key=self.api_key)
+            response = client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": "You are an expert blog writer and writing instructor."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            return f"Error generating content: {e}"
+
+    def _generate_anthropic(self, prompt: str) -> str:
+        if not ANTHROPIC_AVAILABLE:
+            return "Error: anthropic package not installed. Run: pip install anthropic"
+        try:
+            client = anthropic.Anthropic(api_key=self.api_key)
+            message = client.messages.create(
+                model=self.llm_model,
+                max_tokens=2048,
+                system="You are an expert blog writer and writing instructor.",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return message.content[0].text.strip()
+        except Exception as e:
+            return f"Error generating content: {e}"
+
+    def _generate_gemini(self, prompt: str) -> str:
+        if not GEMINI_AVAILABLE:
+            return "Error: google-genai package not installed. Run: pip install google-genai"
+        try:
+            client = google_genai.Client(api_key=self.api_key)
+            response = client.models.generate_content(
+                model=self.llm_model,
+                contents=prompt,
+            )
+            return response.text.strip()
         except Exception as e:
             return f"Error generating content: {e}"
     

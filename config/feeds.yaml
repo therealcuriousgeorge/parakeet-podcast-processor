@@ -1,57 +1,25 @@
 feeds:
-  # High-value business/investment podcasts
-  - name: "Lenny's Podcast"
-    url: "https://feeds.simplecast.com/UZ12E8Qw"
-    category: "product"
-  
-  - name: "Acquired"
-    url: "https://feeds.simplecast.com/kANlq7Qa"
-    category: "business"
-    
-  - name: "Invest Like the Best"
-    url: "https://feeds.simplecast.com/1T87WVeA"
-    category: "investing"
-    
-  - name: "The Twenty Minute VC"
-    url: "https://feeds.simplecast.com/6ea96d8b"
-    category: "venture"
-    
-  - name: "a16z Podcast"
-    url: "https://feeds.simplecast.com/JGE3yC0V"
-    category: "venture"
-    
-  - name: "SaaStr Podcast"
-    url: "https://www.saastr.com/feed/podcast/"
-    category: "saas"
-    
-  # AI/Tech focused
-  - name: "The AI Breakdown"
-    url: "https://feeds.simplecast.com/dIdTXIB4"
-    category: "ai"
-    
-  - name: "Latent Space"
-    url: "https://api.substack.com/feed/podcast/1084089.rss"
-    category: "ai"
-    
-  - name: "Masters in Business"
-    url: "https://feeds.bloomberg.fm/BLM5547189830"
-    category: "business"
+  - name: "Stratechery"
+    url: "https://stratechery.passport.online/feed/podcast/G39iN2LZfgga9bEq6ZCji5"
+    category: "tech"
 
 # Global settings
 settings:
   audio_format: "wav"
-  max_episodes_per_feed: 3
+  max_episodes_per_feed: 1
+  # Delete audio file from data/audio/ after successful transcription
+  # (~115 MB per hour of audio at 16kHz mono WAV)
   cleanup_old_files: true
-  cleanup_days: 30
   
   # Transcription
+  transcription_provider: "local-whisper"  # local-parakeet, local-whisper, openai-api
   whisper_model: "base"  # tiny, base, small, medium, large
-  parakeet_enabled: true  # Use Parakeet MLX on Apple Silicon
+  parakeet_enabled: false  # Use Parakeet MLX on Apple Silicon
   parakeet_model: "mlx-community/parakeet-tdt-0.6b-v2"
   
   # LLM cleaning
   llm_provider: "ollama"  # openai, anthropic, ollama
-  llm_model: "llama3.2:latest"  # For Ollama: llama3.2, qwen2.5, etc.
+  llm_model: "gemma3:12b"  # For Ollama: llama3.2, gemma3:12b, etc.
   ollama_base_url: "http://localhost:11434"
   
   # Output

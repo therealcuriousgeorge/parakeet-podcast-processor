@@ -1,33 +1,57 @@
 feeds:
-  - name: "The Tim Ferriss Show"
-    url: "https://rss.art19.com/tim-ferriss-show"
-    category: "productivity"
-  
-  - name: "a16z Podcast"
-    url: "https://feeds.feedburner.com/a16z"
+  - name: "Example Podcast"
+    url: "https://example.com/feed/podcast"
     category: "tech"
-    
-  - name: "Y Combinator Podcast"
-    url: "https://blog.ycombinator.com/feed/"
-    category: "startups"
 
-# Global settings
+  # Add more feeds here:
+  # - name: "Another Show"
+  #   url: "https://anothershow.com/feed"
+  #   category: "business"
+
 settings:
-  audio_format: "wav"
-  max_episodes_per_feed: 10
+  audio_format: "wav"          # wav or mp3
+  max_episodes_per_feed: 1
+
+  # Delete the audio file from data/audio/ immediately after a successful
+  # transcription (transcript is safely stored in DuckDB first).
+  # A 1-hour WAV at 16kHz mono is ~115 MB — set true to avoid disk growth.
   cleanup_old_files: true
-  cleanup_days: 30
-  
-  # Transcription
-  whisper_model: "base"  # tiny, base, small, medium, large
-  parakeet_enabled: true  # Use Parakeet MLX on Apple Silicon
+
+  # ── Transcription (audio → text) ───────────────────────────────────────────
+  # Options:
+  #   local-parakeet  Apple Silicon only, fastest, fully offline
+  #   local-whisper   Any machine, fully offline, slower
+  #   openai-api      Cloud, ~$0.006/min, requires OPENAI_API_KEY
+  transcription_provider: "local-parakeet"
+
+  # Used when transcription_provider is "local-whisper"
+  # Sizes: tiny, base, small, medium, large  (larger = more accurate, slower)
+  whisper_model: "base"
+
+  # Used when transcription_provider is "local-parakeet"
+  parakeet_enabled: true
   parakeet_model: "mlx-community/parakeet-tdt-0.6b-v2"
-  
-  # LLM cleaning
-  llm_provider: "ollama"  # openai, anthropic, ollama
-  llm_model: "llama3.2"  # For Ollama: llama3.2, qwen2.5, etc.
+
+  # ── LLM Provider (transcript → summary + blog post) ───────────────────────
+  # Options:
+  #   ollama     Fully local, free — requires `ollama serve` + model pulled
+  #   openai     GPT-4o-mini / GPT-4o — requires OPENAI_API_KEY
+  #   anthropic  Claude Haiku / Sonnet — requires ANTHROPIC_API_KEY
+  #   gemini     Gemini Flash / Pro — requires GEMINI_API_KEY
+  llm_provider: "ollama"
+
+  # Model name for your chosen provider:
+  #   ollama:    gemma3:12b, llama3.2, mistral, etc.
+  #   openai:    gpt-4o-mini, gpt-4o
+  #   anthropic: claude-3-5-haiku-20241022, claude-3-7-sonnet-20250219
+  #   gemini:    gemini-2.0-flash, gemini-1.5-pro
+  llm_model: "gemma3:12b"
+
+  # Ollama server URL (only used when llm_provider is "ollama")
   ollama_base_url: "http://localhost:11434"
-  
-  # Output
-  export_format: ["markdown", "json"]
+
+  # ── Output ─────────────────────────────────────────────────────────────────
+  export_format:
+    - "markdown"
+    - "json"
   email_enabled: false

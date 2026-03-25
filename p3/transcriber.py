@@ -1,6 +1,7 @@
-"""Audio transcription using Whisper and Parakeet."""
+"""Audio transcription using Whisper, Parakeet, or OpenAI Whisper API."""
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,21 +10,33 @@ import whisper
 
 from .database import P3Database
 
-# Optional Parakeet MLX support
 try:
     from parakeet_mlx import from_pretrained as parakeet_from_pretrained
     PARAKEET_AVAILABLE = True
 except ImportError:
     PARAKEET_AVAILABLE = False
 
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 
 class AudioTranscriber:
-    def __init__(self, db: P3Database, whisper_model: str = "base", 
-                 use_parakeet: bool = False, parakeet_model: str = "mlx-community/parakeet-tdt-0.6b-v2"):
+    def __init__(self, db: P3Database, whisper_model: str = "base",
+                 use_parakeet: bool = False,
+                 parakeet_model: str = "mlx-community/parakeet-tdt-0.6b-v2",
+                 transcription_provider: str = "local",
+                 openai_api_key: str = None,
+                 cleanup_audio: bool = False):
         self.db = db
         self.whisper_model = whisper_model
         self.use_parakeet = use_parakeet
         self.parakeet_model = parakeet_model
+        self.transcription_provider = transcription_provider
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        self.cleanup_audio = cleanup_audio
         self.whisper = None
         self.parakeet = None
         
@@ -106,6 +119,48 @@ class AudioTranscriber:
             print("Falling back to Whisper")
             return self.transcribe_with_whisper(audio_path)
 
+    def transcribe_with_openai_api(self, audio_path: str) -> Optional[Dict[str, Any]]:
+        """Transcribe audio using the OpenAI Whisper cloud API."""
+        if not OPENAI_AVAILABLE:
+            print("openai package not installed. Run: pip install openai — falling back to local Whisper")
+            return self.transcribe_with_whisper(audio_path)
+
+        if not self.openai_api_key:
+            print("OPENAI_API_KEY not set — falling back to local Whisper")
+            return self.transcribe_with_whisper(audio_path)
+
+        try:
+            client = OpenAI(api_key=self.openai_api_key)
+            with open(audio_path, 'rb') as audio_file:
+                result = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"]
+                )
+
+            segments = []
+            for segment in (result.segments or []):
+                segments.append({
+                    'start': segment.start,
+                    'end': segment.end,
+                    'text': segment.text.strip(),
+                    'speaker': None,
+                    'confidence': 1.0,
+                })
+
+            return {
+                'segments': segments,
+                'language': result.language,
+                'text': result.text,
+                'provider': 'openai-api',
+            }
+
+        except Exception as e:
+            print(f"OpenAI Whisper API transcription failed: {e}")
+            print("Falling back to local Whisper")
+            return self.transcribe_with_whisper(audio_path)
+
     def transcribe_episode(self, episode_id: int) -> bool:
         """Transcribe a single episode and store results."""
         episodes = self.db.get_episodes_by_status('downloaded')
@@ -120,9 +175,10 @@ class AudioTranscriber:
             return False
 
         print(f"Transcribing: {episode['title']}")
-        
-        # Choose transcription method
-        if self.use_parakeet:
+
+        if self.transcription_provider == 'openai-api':
+            result = self.transcribe_with_openai_api(episode['file_path'])
+        elif self.transcription_provider == 'local-parakeet' or self.use_parakeet:
             result = self.transcribe_with_parakeet(episode['file_path'])
         else:
             result = self.transcribe_with_whisper(episode['file_path'])
@@ -132,10 +188,17 @@ class AudioTranscriber:
 
         # Store transcript segments in database
         self.db.add_transcript_segments(episode_id, result['segments'])
-        
+
         # Update episode status
         self.db.update_episode_status(episode_id, 'transcribed')
-        
+
+        # Delete audio file now that transcript is safely stored
+        if self.cleanup_audio:
+            audio_path = Path(episode['file_path'])
+            if audio_path.exists():
+                audio_path.unlink()
+                print(f"✓ Deleted audio: {audio_path.name}")
+
         print(f"✓ Transcribed: {episode['title']}")
         return True
 
