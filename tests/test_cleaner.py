@@ -53,21 +53,23 @@ class TestBasicExtraction:
     def test_returns_required_keys(self, db):
         cleaner = TranscriptCleaner(db, llm_provider="ollama")
         result = cleaner._basic_extraction("OpenAI released a new model for machine learning tasks.")
-        assert "key_topics" in result
-        assert "themes" in result
-        assert "quotes" in result
-        assert "startups" in result
-        assert "summary" in result
+        assert "one_liner" in result
+        assert "concepts_discussed" in result
+        assert "key_concepts" in result
+        assert "mental_models" in result
+        assert "quotable_lines" in result
+        assert "career_relevance" in result
+        assert "verdict" in result
 
-    def test_key_topics_are_strings(self, db):
+    def test_concepts_are_strings(self, db):
         cleaner = TranscriptCleaner(db, llm_provider="ollama")
         result = cleaner._basic_extraction("machine learning artificial intelligence python programming")
-        assert all(isinstance(t, str) for t in result["key_topics"])
+        assert all(isinstance(t, str) for t in result["concepts_discussed"])
 
-    def test_detects_company_suffixes(self, db):
+    def test_verdict_has_depth_field(self, db):
         cleaner = TranscriptCleaner(db, llm_provider="ollama")
-        result = cleaner._basic_extraction("I talked to someone from Acme Labs about their product.")
-        assert any("labs" in s.lower() or "Labs" in s for s in result["startups"])
+        result = cleaner._basic_extraction("some text here")
+        assert "depth" in result["verdict"]
 
 
 # ── JSON extraction helper ─────────────────────────────────────────────────────
@@ -80,19 +82,24 @@ class TestJsonExtraction:
 
     def test_extracts_json_from_clean_response(self, db):
         cleaner = self._make_cleaner(db)
-        raw = '{"key_topics": ["AI"], "themes": ["tech"], "quotes": [], "startups": [], "summary": "Good ep."}'
-        with patch.object(cleaner, '_openai_extract', return_value=json.loads(raw)):
+        raw = {
+            "one_liner": "AI is transforming software.",
+            "concepts_discussed": ["LLMs", "agents"],
+            "key_concepts": [], "mental_models": [], "quotable_lines": [],
+            "career_relevance": [],
+            "verdict": {"novelty": 4, "actionability": 3, "depth": "Deep read", "best_sections": None},
+        }
+        with patch.object(cleaner, '_openai_extract', return_value=raw):
             result = cleaner._generate_structured_summary("some transcript text")
-        assert result["key_topics"] == ["AI"]
+        assert result["one_liner"] == "AI is transforming software."
 
     def test_extracts_json_wrapped_in_prose(self, db):
         """Simulate an LLM that wraps JSON in explanatory text."""
-        cleaner = self._make_cleaner(db)
-        prose = 'Sure! Here is the JSON:\n{"key_topics": ["LLMs"], "themes": [], "quotes": [], "startups": ["Anthropic"], "summary": "x"}\nHope that helps.'
+        prose = 'Sure! Here is the JSON:\n{"one_liner": "Test.", "concepts_discussed": ["LLMs"], "key_concepts": [], "mental_models": [], "quotable_lines": [], "career_relevance": [], "verdict": {"novelty": 3, "actionability": 2, "depth": "Skim", "best_sections": null}}\nHope that helps.'
         json_start = prose.find('{')
         json_end = prose.rfind('}') + 1
         parsed = json.loads(prose[json_start:json_end])
-        assert parsed["startups"] == ["Anthropic"]
+        assert parsed["concepts_discussed"] == ["LLMs"]
 
     def test_missing_json_returns_none_from_slice(self, db):
         content = "I cannot produce JSON right now."
@@ -104,9 +111,17 @@ class TestJsonExtraction:
 
 class TestProviderDispatch:
     FAKE_SUMMARY = {
-        "key_topics": ["AI"], "themes": ["tech"],
-        "quotes": ["Great quote."], "startups": ["Acme"],
-        "summary": "Episode summary."
+        "one_liner": "Episode summary in one sentence.",
+        "concepts_discussed": ["AI agents", "LLM reasoning"],
+        "key_concepts": [
+            {"name": "AI Agents", "summary": "Autonomous systems.", "why_it_matters": "Reshaping ops."}
+        ],
+        "mental_models": [],
+        "quotable_lines": [
+            {"quote": "Great quote.", "speaker": "Host", "context": "On AI."}
+        ],
+        "career_relevance": ["Relevant to AI product strategy."],
+        "verdict": {"novelty": 4, "actionability": 3, "depth": "Deep read", "best_sections": None},
     }
 
     def test_ollama_dispatch(self, db, episode_id):
@@ -114,7 +129,7 @@ class TestProviderDispatch:
         with patch.object(cleaner, '_ollama_extract', return_value=self.FAKE_SUMMARY), \
              patch.object(cleaner, '_ollama_clean', side_effect=lambda t: t):
             result = cleaner.generate_summary(episode_id)
-        assert result["key_topics"] == ["AI"]
+        assert result["one_liner"] == "Episode summary in one sentence."
         summaries = db.get_summaries_by_date(datetime.now())
         assert len(summaries) == 1
 
@@ -123,21 +138,21 @@ class TestProviderDispatch:
         with patch.object(cleaner, '_openai_extract', return_value=self.FAKE_SUMMARY), \
              patch.object(cleaner, '_openai_clean', side_effect=lambda t: t):
             result = cleaner.generate_summary(episode_id)
-        assert result["summary"] == "Episode summary."
+        assert result["concepts_discussed"] == ["AI agents", "LLM reasoning"]
 
     def test_anthropic_dispatch(self, db, episode_id):
         cleaner = TranscriptCleaner(db, llm_provider="anthropic", api_key="fake")
         with patch.object(cleaner, '_anthropic_extract', return_value=self.FAKE_SUMMARY), \
              patch.object(cleaner, '_anthropic_clean', side_effect=lambda t: t):
             result = cleaner.generate_summary(episode_id)
-        assert result["startups"] == ["Acme"]
+        assert result["career_relevance"] == ["Relevant to AI product strategy."]
 
     def test_gemini_dispatch(self, db, episode_id):
         cleaner = TranscriptCleaner(db, llm_provider="gemini", api_key="fake")
         with patch.object(cleaner, '_gemini_extract', return_value=self.FAKE_SUMMARY), \
              patch.object(cleaner, '_gemini_clean', side_effect=lambda t: t):
             result = cleaner.generate_summary(episode_id)
-        assert result["themes"] == ["tech"]
+        assert result["verdict"]["novelty"] == 4
 
     def test_failed_llm_falls_back_to_basic_extraction(self, db, episode_id):
         cleaner = TranscriptCleaner(db, llm_provider="openai", api_key="fake")
@@ -146,7 +161,7 @@ class TestProviderDispatch:
             result = cleaner.generate_summary(episode_id)
         # Falls back to _basic_extraction — must still return a valid dict
         assert result is not None
-        assert "key_topics" in result
+        assert "one_liner" in result
 
     def test_empty_transcript_returns_none(self, db):
         pid = db.add_podcast("S", "https://example.com/f2", "tech")

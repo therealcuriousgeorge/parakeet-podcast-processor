@@ -1,6 +1,6 @@
 feeds:
-  - name: "Stratechery"
-    url: "https://stratechery.passport.online/feed/podcast/G39iN2LZfgga9bEq6ZCji5"
+  - name: "Sharp Tech"
+    url: "https://sharptech.fm/feed/podcast/G39iN2LZfgga9bEq6ZCji5"
     category: "tech"
 
 # Global settings

@@ -63,6 +63,20 @@ class P3Database:
         """)
 
         self.conn.execute("""
+            CREATE SEQUENCE IF NOT EXISTS error_id_seq START 1
+        """)
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS episode_errors (
+                id INTEGER PRIMARY KEY DEFAULT nextval('error_id_seq'),
+                episode_id INTEGER REFERENCES episodes(id),
+                stage VARCHAR NOT NULL,
+                error_type VARCHAR,
+                error_message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        self.conn.execute("""
             CREATE SEQUENCE IF NOT EXISTS summary_id_seq START 1
         """)
         self.conn.execute("""
@@ -75,9 +89,17 @@ class P3Database:
                 startups JSON,
                 digest_date DATE,
                 full_summary TEXT,
+                structured_summary TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: add structured_summary to existing databases
+        try:
+            self.conn.execute(
+                "ALTER TABLE summaries ADD COLUMN IF NOT EXISTS structured_summary TEXT"
+            )
+        except Exception:
+            pass
 
     def add_podcast(self, title: str, rss_url: str, category: str = None) -> int:
         """Add new podcast feed."""
@@ -192,15 +214,17 @@ class P3Database:
 
     def add_summary(self, episode_id: int, key_topics: List[str], themes: List[str],
                    quotes: List[str], startups: List[str], full_summary: str,
-                   digest_date: datetime = None):
+                   digest_date: datetime = None, structured_summary: str = None):
         """Add episode summary."""
         if digest_date is None:
             digest_date = datetime.now().date()
-            
+
         import json
         self.conn.execute("""
-            INSERT INTO summaries (episode_id, key_topics, themes, quotes, startups, full_summary, digest_date) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO summaries
+                (episode_id, key_topics, themes, quotes, startups,
+                 full_summary, structured_summary, digest_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             episode_id,
             json.dumps(key_topics),
@@ -208,37 +232,94 @@ class P3Database:
             json.dumps(quotes),
             json.dumps(startups),
             full_summary,
-            digest_date
+            structured_summary,
+            digest_date,
         ))
 
     def get_summaries_by_date(self, date: datetime) -> List[Dict[str, Any]]:
         """Get all summaries for a specific date."""
         results = self.conn.execute("""
-            SELECT s.*, e.title as episode_title, p.title as podcast_title
+            SELECT s.id, s.episode_id, s.key_topics, s.themes, s.quotes, s.startups,
+                   s.digest_date, s.full_summary, s.structured_summary, s.created_at,
+                   e.title AS episode_title, p.title AS podcast_title
             FROM summaries s
             JOIN episodes e ON s.episode_id = e.id
             JOIN podcasts p ON e.podcast_id = p.id
             WHERE s.digest_date = ?
             ORDER BY p.title, e.title
         """, (date.date(),)).fetchall()
-        
+
+        import json
         summaries = []
         for row in results:
-            import json
             summaries.append({
                 "id": row[0],
                 "episode_id": row[1],
-                "key_topics": json.loads(row[2]),
-                "themes": json.loads(row[3]),
-                "quotes": json.loads(row[4]),
-                "startups": json.loads(row[5]),
+                "key_topics": json.loads(row[2]) if row[2] else [],
+                "themes": json.loads(row[3]) if row[3] else [],
+                "quotes": json.loads(row[4]) if row[4] else [],
+                "startups": json.loads(row[5]) if row[5] else [],
                 "digest_date": row[6],
                 "full_summary": row[7],
-                "created_at": row[8],
-                "episode_title": row[9],
-                "podcast_title": row[10]
+                "structured_summary": row[8],
+                "created_at": row[9],
+                "episode_title": row[10],
+                "podcast_title": row[11],
             })
         return summaries
+
+    def add_error(self, episode_id: int, stage: str, error: Exception) -> None:
+        """Record a processing failure for an episode."""
+        self.conn.execute("""
+            INSERT INTO episode_errors (episode_id, stage, error_type, error_message)
+            VALUES (?, ?, ?, ?)
+        """, (
+            episode_id,
+            stage,
+            type(error).__name__,
+            str(error),
+        ))
+        self.update_episode_status(episode_id, 'failed')
+
+    def get_errors(self, episode_id: int = None) -> List[Dict[str, Any]]:
+        """Return all recorded errors, optionally filtered by episode."""
+        if episode_id is not None:
+            rows = self.conn.execute("""
+                SELECT ee.id, ee.episode_id, ee.stage, ee.error_type, ee.error_message,
+                       ee.created_at, e.title AS episode_title, p.title AS podcast_title
+                FROM episode_errors ee
+                JOIN episodes e ON ee.episode_id = e.id
+                JOIN podcasts p ON e.podcast_id = p.id
+                WHERE ee.episode_id = ?
+                ORDER BY ee.created_at DESC
+            """, (episode_id,)).fetchall()
+        else:
+            rows = self.conn.execute("""
+                SELECT ee.id, ee.episode_id, ee.stage, ee.error_type, ee.error_message,
+                       ee.created_at, e.title AS episode_title, p.title AS podcast_title
+                FROM episode_errors ee
+                JOIN episodes e ON ee.episode_id = e.id
+                JOIN podcasts p ON e.podcast_id = p.id
+                ORDER BY ee.created_at DESC
+            """).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "episode_id": r[1],
+                "stage": r[2],
+                "error_type": r[3],
+                "error_message": r[4],
+                "created_at": r[5],
+                "episode_title": r[6],
+                "podcast_title": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_failed_episodes(self) -> List[Dict[str, Any]]:
+        """Return all episodes currently in 'failed' status."""
+        return self.get_episodes_by_status('failed')
 
     def close(self):
         """Close database connection."""

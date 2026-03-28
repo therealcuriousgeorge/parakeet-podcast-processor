@@ -229,44 +229,181 @@ def export(ctx, date, format, output):
         date_str = target_date.strftime('%Y-%m-%d')
         podcast_slug = _podcast_label(summaries)
         if fmt == 'markdown':
-            content = exporter.export_markdown(summaries, target_date.date())
-            filename = output or f"{date_str}_{podcast_slug}.md"
+            if output:
+                # If an explicit output path is given, write a single combined file
+                content = exporter.export_markdown(summaries, target_date.date())
+                with open(output, 'w') as f:
+                    f.write(content)
+                console.print(f"[green]✓ Exported markdown: {output}[/green]")
+            else:
+                # Default: one file per episode
+                for episode in summaries:
+                    filename = exporter.episode_filename(episode, target_date.date())
+                    content = exporter.export_episode_markdown(episode, target_date.date())
+                    with open(filename, 'w') as f:
+                        f.write(content)
+                    console.print(f"[green]✓ Exported markdown: {filename}[/green]")
         elif fmt == 'json':
             content = exporter.export_json(summaries, target_date.date())
             filename = output or f"{date_str}_{podcast_slug}.json"
+            with open(filename, 'w') as f:
+                f.write(content)
+            console.print(f"[green]✓ Exported json: {filename}[/green]")
         else:
             console.print(f"[red]Unsupported format: {fmt}[/red]")
             continue
-        
-        # Write to file
-        with open(filename, 'w') as f:
-            f.write(content)
-        
-        console.print(f"[green]✓ Exported {fmt}: {filename}[/green]")
 
 
 @main.command()
+@click.option('--detail', is_flag=True, default=False, help='Show individual episodes, not just counts')
+@click.option('--filter', 'status_filter', default=None,
+              type=click.Choice(['downloaded', 'transcribed', 'processed']),
+              help='Show only episodes with this status')
 @click.pass_context
-def status(ctx):
-    """Show processing status of episodes."""
+def status(ctx, detail, status_filter):
+    """Show processing status of episodes.
+
+    By default shows a summary count table. Use --detail to list every
+    episode with its podcast, date, and current stage. Use --filter to
+    narrow to a specific stage (e.g. --filter transcribed).
+    """
     db = ctx.obj['db']
-    
-    # Count episodes by status
-    statuses = ['downloaded', 'transcribed', 'processed']
-    counts = {}
-    
-    for status in statuses:
-        episodes = db.get_episodes_by_status(status)
-        counts[status] = len(episodes)
-    
-    table = Table(title="Episode Processing Status")
-    table.add_column("Status", style="cyan")
-    table.add_column("Count", style="green", justify="right")
-    
-    for status, count in counts.items():
-        table.add_row(status.title(), str(count))
-    
+
+    statuses = ['downloaded', 'transcribed', 'processed', 'failed']
+    all_episodes: dict = {}
+    for s in statuses:
+        all_episodes[s] = db.get_episodes_by_status(s)
+
+    failed_count = len(all_episodes['failed'])
+
+    # ── Summary count table (always shown) ────────────────────────────────────
+    status_styles = {
+        'downloaded':  'yellow',
+        'transcribed': 'blue',
+        'processed':   'green',
+        'failed':      'red',
+    }
+    meta = {
+        'downloaded':  "Audio saved — waiting for transcription",
+        'transcribed': "Transcript ready — waiting for LLM digest",
+        'processed':   "Summary generated — export-ready",
+        'failed':      "Error recorded — run 'p3 errors' for details",
+    }
+    total = sum(len(v) for v in all_episodes.values())
+    summary = Table(title="Episode Pipeline Status", show_footer=True)
+    summary.add_column("Stage", style="bold")
+    summary.add_column("Count", justify="right", footer=str(total))
+    summary.add_column("Meaning")
+    for s in statuses:
+        count = len(all_episodes[s])
+        if count == 0 and s == 'failed':
+            continue  # hide the failed row when nothing has failed
+        summary.add_row(
+            f"[{status_styles[s]}]{s.title()}[/{status_styles[s]}]",
+            f"[{status_styles[s]}]{count}[/{status_styles[s]}]",
+            meta[s],
+        )
+    console.print(summary)
+
+    if failed_count:
+        console.print(f"[bold red]⚠  {failed_count} episode(s) failed — run 'p3 errors' to see details[/bold red]")
+
+    # ── Detail table ──────────────────────────────────────────────────────────
+    if detail or status_filter:
+        stages = [status_filter] if status_filter else statuses
+        for s in stages:
+            episodes = all_episodes[s]
+            if not episodes:
+                continue
+            detail_table = Table(
+                title=f"[{status_styles[s]}]{s.title()}[/{status_styles[s]}] — {len(episodes)} episode(s)",
+                show_lines=True,
+            )
+            detail_table.add_column("ID", style="dim", justify="right", no_wrap=True)
+            detail_table.add_column("Podcast", style="cyan", no_wrap=True)
+            detail_table.add_column("Episode Title")
+            detail_table.add_column("Date", no_wrap=True)
+            detail_table.add_column("File", style="dim")
+
+            for ep in episodes:
+                ep_date = str(ep.get('date', ''))[:10] if ep.get('date') else '—'
+                file_path = ep.get('file_path') or '—'
+                if len(file_path) > 40:
+                    file_path = '…' + file_path[-38:]
+                detail_table.add_row(
+                    str(ep['id']),
+                    ep.get('podcast_title', '—'),
+                    ep.get('title', '—'),
+                    ep_date,
+                    file_path,
+                )
+            console.print(detail_table)
+
+
+@main.command()
+@click.option('--episode-id', type=int, default=None, help='Show errors for a specific episode')
+@click.option('--retry', is_flag=True, default=False, help='Re-queue failed episodes back to downloaded so they can be retried')
+@click.pass_context
+def errors(ctx, episode_id, retry):
+    """Show the error log for failed episodes.
+
+    Each entry records which stage failed (transcription or digest),
+    the exception type, and the full error message.
+
+    Use --retry to reset failed episodes back to 'downloaded' so they
+    will be picked up again on the next 'p3 transcribe' or 'p3 run'.
+    """
+    db = ctx.obj['db']
+
+    if retry:
+        failed = db.get_failed_episodes()
+        if not failed:
+            console.print("[green]No failed episodes to retry.[/green]")
+            return
+        for ep in failed:
+            db.update_episode_status(ep['id'], 'downloaded')
+            console.print(f"[yellow]Re-queued:[/yellow] {ep['title']} (id={ep['id']})")
+        console.print(f"[green]✓ {len(failed)} episode(s) reset to 'downloaded' — run 'p3 transcribe' to retry[/green]")
+        return
+
+    error_list = db.get_errors(episode_id=episode_id)
+
+    if not error_list:
+        msg = f"for episode {episode_id}" if episode_id else "— all clear"
+        console.print(f"[green]No errors recorded {msg}[/green]")
+        return
+
+    table = Table(
+        title=f"[red]Error Log — {len(error_list)} record(s)[/red]",
+        show_lines=True,
+    )
+    table.add_column("ID", style="dim", justify="right", no_wrap=True)
+    table.add_column("Ep ID", justify="right", no_wrap=True)
+    table.add_column("Podcast", style="cyan", no_wrap=True)
+    table.add_column("Episode Title")
+    table.add_column("Stage", no_wrap=True)
+    table.add_column("Error Type", style="red", no_wrap=True)
+    table.add_column("Message")
+    table.add_column("When", no_wrap=True)
+
+    for err in error_list:
+        when = str(err.get('created_at', ''))[:16]
+        msg = err['error_message']
+        if len(msg) > 120:
+            msg = msg[:117] + '…'
+        table.add_row(
+            str(err['id']),
+            str(err['episode_id']),
+            err['podcast_title'],
+            err['episode_title'],
+            err['stage'],
+            err['error_type'],
+            msg,
+            when,
+        )
+
     console.print(table)
+    console.print("\n[dim]Tip: use 'p3 errors --retry' to re-queue all failed episodes[/dim]")
 
 
 @main.command()
@@ -484,6 +621,120 @@ def init(ctx):
     console.print("  3. [cyan]p3 transcribe[/cyan]              — transcribe audio")
     console.print("  4. [cyan]p3 digest[/cyan]                  — generate summaries")
     console.print("  5. [cyan]p3 write --topic \"...\"[/cyan]     — generate blog post")
+    console.print("  Or run everything at once: [cyan]p3 run[/cyan]")
+
+
+@main.command()
+@click.option('--max-episodes', default=None, type=int, help='Max episodes per feed (overrides config)')
+@click.option('--output-dir', default='.', show_default=True, help='Directory to write per-episode markdown files')
+@click.pass_context
+def run(ctx, max_episodes, output_dir):
+    """Run the full pipeline: fetch → transcribe → digest → export.
+
+    Writes one markdown file per episode into OUTPUT_DIR, named:
+    YYYY-MM-DD_PodcastName_EpisodeTitle.md
+    """
+    import os
+    from pathlib import Path
+
+    config = load_config(ctx.obj['config_path'])
+    db = ctx.obj['db']
+    settings = config.get('settings', {})
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. Fetch ───────────────────────────────────────────────────────────────
+    console.rule("[bold blue]Step 1 — Fetch[/bold blue]")
+    max_eps = max_episodes or settings.get('max_episodes_per_feed', 10)
+    downloader = PodcastDownloader(
+        db=db,
+        max_episodes=max_eps,
+        audio_format=settings.get('audio_format', 'wav'),
+    )
+    feeds = config.get('feeds', [])
+    if not feeds:
+        console.print("[yellow]No feeds configured — edit config/feeds.yaml[/yellow]")
+        return
+
+    total_downloaded = 0
+    results = downloader.fetch_all_feeds(feeds)
+    table = Table()
+    table.add_column("Podcast", style="cyan")
+    table.add_column("New Episodes", style="green", justify="right")
+    for name, count in results.items():
+        table.add_row(name, str(count))
+        total_downloaded += count
+    console.print(table)
+    console.print(f"[green]Downloaded {total_downloaded} new episodes[/green]")
+
+    # ── 2. Transcribe ──────────────────────────────────────────────────────────
+    console.rule("[bold blue]Step 2 — Transcribe[/bold blue]")
+    transcription_provider = settings.get('transcription_provider', 'local-whisper')
+    whisper_model = settings.get('whisper_model', 'base')
+    provider_labels = {
+        'local-parakeet': 'Parakeet MLX (local)',
+        'local-whisper': f'Whisper {whisper_model} (local)',
+        'openai-api': 'OpenAI Whisper API (cloud)',
+    }
+    console.print(f"Provider: {provider_labels.get(transcription_provider, transcription_provider)}")
+
+    transcriber = AudioTranscriber(
+        db=db,
+        whisper_model=whisper_model,
+        use_parakeet=(transcription_provider == 'local-parakeet'),
+        parakeet_model=settings.get('parakeet_model', 'mlx-community/parakeet-tdt-0.6b-v2'),
+        transcription_provider=transcription_provider,
+        cleanup_audio=settings.get('cleanup_old_files', False),
+    )
+    episodes_to_transcribe = db.get_episodes_by_status('downloaded')
+    if not episodes_to_transcribe:
+        console.print("[yellow]No episodes to transcribe[/yellow]")
+    else:
+        transcribed = 0
+        for episode in track(episodes_to_transcribe, description="Transcribing..."):
+            if transcriber.transcribe_episode(episode['id']):
+                transcribed += 1
+        console.print(f"[green]Transcribed {transcribed} episodes[/green]")
+
+    # ── 3. Digest ──────────────────────────────────────────────────────────────
+    console.rule("[bold blue]Step 3 — Digest[/bold blue]")
+    llm_provider = settings.get('llm_provider', 'openai')
+    llm_model = settings.get('llm_model', 'gpt-3.5-turbo')
+    console.print(f"LLM: {llm_provider} / {llm_model}")
+
+    cleaner = TranscriptCleaner(
+        db=db,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        ollama_base_url=settings.get('ollama_base_url', 'http://localhost:11434'),
+    )
+    processed = cleaner.process_all_transcribed()
+    console.print(f"[green]Summarized {processed} episodes[/green]")
+
+    # ── 4. Export ──────────────────────────────────────────────────────────────
+    console.rule("[bold blue]Step 4 — Export[/bold blue]")
+    target_date = datetime.now()
+    summaries = db.get_summaries_by_date(target_date)
+
+    if not summaries:
+        console.print("[yellow]No summaries for today — nothing to export[/yellow]")
+        return
+
+    exporter = DigestExporter(db)
+    exported = 0
+    for episode in summaries:
+        filename = out_dir / exporter.episode_filename(episode, target_date.date())
+        content = exporter.export_episode_markdown(episode, target_date.date())
+        filename.write_text(content)
+        console.print(f"[green]✓ {filename}[/green]")
+        exported += 1
+
+    console.rule()
+    console.print(
+        f"[bold green]Done.[/bold green] "
+        f"{total_downloaded} fetched · {processed} summarized · {exported} files written to [cyan]{out_dir}[/cyan]"
+    )
 
 
 if __name__ == '__main__':

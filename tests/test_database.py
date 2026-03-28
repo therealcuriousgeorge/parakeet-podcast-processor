@@ -116,6 +116,7 @@ class TestSummaries:
 
     def test_add_and_retrieve_summary(self, db, episode_id):
         target_date = datetime(2026, 3, 24)
+        structured = '{"one_liner": "A great episode about AI.", "concepts_discussed": ["AI", "LLMs"]}'
         db.add_summary(
             episode_id=episode_id,
             key_topics=["AI", "LLMs"],
@@ -123,6 +124,7 @@ class TestSummaries:
             quotes=["AI is the future."],
             startups=["OpenAI"],
             full_summary="A great episode about AI.",
+            structured_summary=structured,
             digest_date=target_date,
         )
         summaries = db.get_summaries_by_date(target_date)
@@ -133,8 +135,14 @@ class TestSummaries:
         assert s["quotes"] == ["AI is the future."]
         assert s["startups"] == ["OpenAI"]
         assert s["full_summary"] == "A great episode about AI."
+        assert s["structured_summary"] == structured
         assert s["episode_title"] == "Ep"
         assert s["podcast_title"] == "Show"
+
+    def test_structured_summary_defaults_to_none(self, db, episode_id):
+        db.add_summary(episode_id, [], [], [], [], "plain summary", datetime(2026, 3, 24))
+        summaries = db.get_summaries_by_date(datetime(2026, 3, 24))
+        assert summaries[0]["structured_summary"] is None
 
     def test_no_summaries_for_wrong_date(self, db, episode_id):
         db.add_summary(episode_id, ["topic"], [], [], [], "summary",

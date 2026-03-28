@@ -50,7 +50,12 @@ class AudioTranscriber:
         """Lazy load Parakeet MLX model."""
         if self.parakeet is None and PARAKEET_AVAILABLE:
             print(f"Loading Parakeet model: {self.parakeet_model}")
-            self.parakeet = parakeet_from_pretrained(self.parakeet_model)
+            try:
+                self.parakeet = parakeet_from_pretrained(self.parakeet_model)
+            except Exception as e:
+                # MLX/Metal failures surface here as Python exceptions when
+                # the GPU is unavailable or the model can't be loaded.
+                raise RuntimeError(f"MLX/Parakeet model load failed: {e}") from e
 
     def transcribe_with_whisper(self, audio_path: str) -> Dict[str, Any]:
         """Transcribe audio using OpenAI Whisper."""
@@ -165,34 +170,45 @@ class AudioTranscriber:
         """Transcribe a single episode and store results."""
         episodes = self.db.get_episodes_by_status('downloaded')
         episode = next((ep for ep in episodes if ep['id'] == episode_id), None)
-        
+
         if not episode:
-            print(f"Episode {episode_id} not found or already processed")
+            print(f"Episode {episode_id} not found or not in 'downloaded' status")
             return False
 
         if not episode['file_path'] or not Path(episode['file_path']).exists():
-            print(f"Audio file not found: {episode.get('file_path')}")
+            err = FileNotFoundError(f"Audio file missing: {episode.get('file_path')}")
+            print(f"✗ {err}")
+            self.db.add_error(episode_id, 'transcription', err)
             return False
 
         print(f"Transcribing: {episode['title']}")
 
-        if self.transcription_provider == 'openai-api':
-            result = self.transcribe_with_openai_api(episode['file_path'])
-        elif self.transcription_provider == 'local-parakeet' or self.use_parakeet:
-            result = self.transcribe_with_parakeet(episode['file_path'])
-        else:
-            result = self.transcribe_with_whisper(episode['file_path'])
-        
-        if not result:
+        try:
+            if self.transcription_provider == 'openai-api':
+                result = self.transcribe_with_openai_api(episode['file_path'])
+            elif self.transcription_provider == 'local-parakeet' or self.use_parakeet:
+                result = self.transcribe_with_parakeet(episode['file_path'])
+            else:
+                result = self.transcribe_with_whisper(episode['file_path'])
+        except Exception as e:
+            print(f"✗ Transcription crashed for episode {episode_id}: {e}")
+            self.db.add_error(episode_id, 'transcription', e)
             return False
 
-        # Store transcript segments in database
-        self.db.add_transcript_segments(episode_id, result['segments'])
+        if not result:
+            err = RuntimeError("Transcription returned no output — provider may have failed silently")
+            print(f"✗ {err}")
+            self.db.add_error(episode_id, 'transcription', err)
+            return False
 
-        # Update episode status
-        self.db.update_episode_status(episode_id, 'transcribed')
+        try:
+            self.db.add_transcript_segments(episode_id, result['segments'])
+            self.db.update_episode_status(episode_id, 'transcribed')
+        except Exception as e:
+            print(f"✗ Failed to save transcript for episode {episode_id}: {e}")
+            self.db.add_error(episode_id, 'transcription', e)
+            return False
 
-        # Delete audio file now that transcript is safely stored
         if self.cleanup_audio:
             audio_path = Path(episode['file_path'])
             if audio_path.exists():
