@@ -116,6 +116,12 @@ def transcribe(ctx, model, episode_id):
 
     cleanup_audio = settings.get('cleanup_old_files', False)
 
+    # Build a lookup: podcast name → save_transcript flag
+    transcript_feeds = {
+        f['name']: f.get('save_transcript', False)
+        for f in config.get('feeds', [])
+    }
+
     transcriber = AudioTranscriber(
         db=db,
         whisper_model=whisper_model,
@@ -125,27 +131,37 @@ def transcribe(ctx, model, episode_id):
         cleanup_audio=cleanup_audio,
         parakeet_chunk_duration=settings.get('parakeet_chunk_duration', 600),
     )
-    
+
+    def _maybe_save_transcript(ep_id):
+        episode = db.get_episode_by_id(ep_id)
+        if episode and transcript_feeds.get(episode.get('podcast_title', ''), False):
+            from .exporter import write_transcript
+            path = write_transcript(db, ep_id)
+            if path:
+                console.print(f"[cyan]  Transcript saved: {path}[/cyan]")
+
     if episode_id:
         console.print(f"[blue]Transcribing episode {episode_id}...[/blue]")
         success = transcriber.transcribe_episode(episode_id)
         if success:
             console.print(f"[green]✓ Episode {episode_id} transcribed[/green]")
+            _maybe_save_transcript(episode_id)
         else:
             console.print(f"[red]✗ Failed to transcribe episode {episode_id}[/red]")
     else:
         console.print("[blue]Transcribing all pending episodes...[/blue]")
         episodes = db.get_episodes_by_status('downloaded')
-        
+
         if not episodes:
             console.print("[yellow]No episodes to transcribe[/yellow]")
             return
-        
+
         transcribed = 0
         for episode in track(episodes, description="Transcribing..."):
             if transcriber.transcribe_episode(episode['id']):
                 transcribed += 1
-        
+                _maybe_save_transcript(episode['id'])
+
         console.print(f"[green]Transcribed {transcribed} episodes[/green]")
 
 
@@ -253,6 +269,53 @@ def export(ctx, date, format, output):
         else:
             console.print(f"[red]Unsupported format: {fmt}[/red]")
             continue
+
+
+@main.command()
+@click.option('--episode-id', type=int, default=None,
+              help='Episode ID to export (from p3 status --detail)')
+@click.option('--output-dir', default='transcripts', show_default=True,
+              help='Directory to write transcript files')
+@click.option('--all-processed', is_flag=True, default=False,
+              help='Export transcripts for every processed episode')
+@click.pass_context
+def transcript(ctx, episode_id, output_dir, all_processed):
+    """Export full transcripts to readable markdown files.
+
+    Each file is named YYYY-MM-DD_PodcastName_EpisodeTitle_transcript.md
+    and contains every transcribed segment with [HH:MM:SS] timestamps.
+
+    Use --episode-id for a specific episode, or --all-processed to export
+    every episode in the database regardless of the save_transcript setting.
+    """
+    from .exporter import write_transcript
+    db = ctx.obj['db']
+
+    if all_processed:
+        episodes = db.get_episodes_by_status('processed')
+        if not episodes:
+            console.print("[yellow]No processed episodes found[/yellow]")
+            return
+        saved = 0
+        for ep in episodes:
+            path = write_transcript(db, ep['id'], output_dir=output_dir)
+            if path:
+                console.print(f"[green]✓[/green] {path}")
+                saved += 1
+        console.print(f"\n[green]{saved} transcript(s) written to {output_dir}/[/green]")
+        return
+
+    if not episode_id:
+        console.print("[red]Provide --episode-id N or --all-processed[/red]")
+        console.print("Tip: run 'p3 status --detail' to see episode IDs")
+        return
+
+    path = write_transcript(db, episode_id, output_dir=output_dir)
+    if path:
+        console.print(f"[green]✓ Transcript saved: {path}[/green]")
+    else:
+        console.print(f"[red]No transcript found for episode {episode_id}[/red]")
+        console.print("Tip: run 'p3 status --detail' to confirm the episode exists")
 
 
 @main.command()
@@ -690,6 +753,12 @@ def run(ctx, max_episodes, output_dir):
         parakeet_chunk_duration=settings.get('parakeet_chunk_duration', 600),
     )
     episodes_to_transcribe = db.get_episodes_by_status('downloaded')
+    # Build transcript save lookup for the run command too
+    run_transcript_feeds = {
+        f['name']: f.get('save_transcript', False)
+        for f in feeds
+    }
+
     if not episodes_to_transcribe:
         console.print("[yellow]No episodes to transcribe[/yellow]")
     else:
@@ -697,6 +766,11 @@ def run(ctx, max_episodes, output_dir):
         for episode in track(episodes_to_transcribe, description="Transcribing..."):
             if transcriber.transcribe_episode(episode['id']):
                 transcribed += 1
+                if run_transcript_feeds.get(episode.get('podcast_title', ''), False):
+                    from .exporter import write_transcript
+                    path = write_transcript(db, episode['id'])
+                    if path:
+                        console.print(f"[cyan]  Transcript saved: {path}[/cyan]")
         console.print(f"[green]Transcribed {transcribed} episodes[/green]")
 
     # ── 3. Digest ──────────────────────────────────────────────────────────────

@@ -2,7 +2,8 @@
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 
@@ -11,6 +12,47 @@ def _slugify(text: str, max_len: int = 60) -> str:
     slug = re.sub(r'[^\w\s-]', '', text)
     slug = re.sub(r'[\s_]+', '-', slug).strip('-')
     return slug[:max_len].rstrip('-')
+
+
+def write_transcript(db, episode_id: int, output_dir: str = "transcripts") -> Optional[str]:
+    """Write the full transcript for an episode to a markdown file.
+
+    Returns the file path written, or None if no transcript segments exist.
+    File name: YYYY-MM-DD_PodcastName_EpisodeTitle_transcript.md
+    """
+    episode = db.get_episode_by_id(episode_id)
+    if not episode:
+        return None
+
+    segments = db.get_transcripts_for_episode(episode_id)
+    if not segments:
+        return None
+
+    ep_date = str(episode.get('date', ''))[:10] or datetime.now().strftime('%Y-%m-%d')
+    podcast_slug = _slugify(episode.get('podcast_title', 'podcast'))
+    episode_slug = _slugify(episode.get('title', 'episode'))
+    filename = f"{ep_date}_{podcast_slug}_{episode_slug}_transcript.md"
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filepath = out_dir / filename
+
+    lines = [
+        f"# {episode['podcast_title']}",
+        f"## {episode['title']}",
+        f"*{ep_date}*",
+        "",
+        "---",
+        "",
+    ]
+    for seg in segments:
+        start = seg.get('timestamp_start') or 0
+        h, m, s = int(start // 3600), int((start % 3600) // 60), int(start % 60)
+        timestamp = f"[{h:02d}:{m:02d}:{s:02d}]"
+        lines.append(f"{timestamp} {seg['text']}")
+
+    filepath.write_text("\n".join(lines))
+    return str(filepath)
 
 
 class DigestExporter:
