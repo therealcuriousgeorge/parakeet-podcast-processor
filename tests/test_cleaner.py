@@ -90,7 +90,7 @@ class TestJsonExtraction:
             "verdict": {"novelty": 4, "actionability": 3, "depth": "Deep read", "best_sections": None},
         }
         with patch.object(cleaner, '_openai_extract', return_value=raw):
-            result = cleaner._generate_structured_summary("some transcript text")
+            result = cleaner._generate_structured_summary("some transcript text", "No Priors")
         assert result["one_liner"] == "AI is transforming software."
 
     def test_extracts_json_wrapped_in_prose(self, db):

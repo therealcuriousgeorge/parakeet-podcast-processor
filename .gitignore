@@ -11,19 +11,19 @@ venv/
 .venv
 .pytest_cache/
 
-# P³ Data
+# P³ Data — never commit audio, DB, or generated output
 data/
 logs/
 exports/
-# Note: Including config/feeds.yaml and blog_posts/ for demo purposes
+blog_posts/
 
-# P³ Generated Output Files
+# Private feed config — contains personal RSS tokens.
+# Copy config/feeds.yaml.example → config/feeds.yaml and fill in your URLs.
+config/feeds.yaml
+
+# P³ Generated Output Files (root-level)
 digest_*.md
 digest_*.json
-*.wav
-*.mp3
-
-# Generated exports and analysis (root-level output)
 202*_*.md
 202*_*.json
 full_transcript.txt
@@ -32,6 +32,12 @@ detailed_podcast_analysis.md
 podcast_analysis.json
 structured_podcast_analysis.txt
 PODCAST_ANALYSIS.md
+
+# Audio / media
+*.wav
+*.mp3
+*.m4a
+*.ogg
 
 # IDE
 .vscode/

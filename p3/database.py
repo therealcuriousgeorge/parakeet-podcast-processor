@@ -317,6 +317,29 @@ class P3Database:
             for r in rows
         ]
 
+    def get_episode_by_id(self, episode_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single episode by ID, regardless of status."""
+        result = self.conn.execute("""
+            SELECT e.*, p.title AS podcast_title
+            FROM episodes e
+            JOIN podcasts p ON e.podcast_id = p.id
+            WHERE e.id = ?
+        """, (episode_id,)).fetchone()
+        if result:
+            return {
+                "id": result[0],
+                "podcast_id": result[1],
+                "title": result[2],
+                "date": result[3],
+                "url": result[4],
+                "file_path": result[5],
+                "duration_seconds": result[6],
+                "status": result[7],
+                "created_at": result[8],
+                "podcast_title": result[9],
+            }
+        return None
+
     def get_failed_episodes(self) -> List[Dict[str, Any]]:
         """Return all episodes currently in 'failed' status."""
         return self.get_episodes_by_status('failed')

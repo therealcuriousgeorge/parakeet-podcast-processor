@@ -6,65 +6,7 @@ from datetime import datetime, date
 from typing import Dict, List, Optional, Any
 import httpx
 
-SUMMARY_SYSTEM_PROMPT = """You are a summarization engine for a senior product leader with 17+ years of experience across Amazon, Walmart, Zillow, and other tech companies. He currently leads product management in Last Mile Delivery at Walmart Global Tech, working at the intersection of data, operations, supply chain optimization, and platform-scale systems. He thinks in frameworks and mental models, and values structured knowledge he can scan quickly and drill into selectively.
-
-His core interests:
-- Product management craft and leadership
-- AI/ML and its applications to product, operations, and strategy
-- Business strategy and competitive analysis (he follows Ben Thompson's Aggregation Theory lens closely)
-- Supply chain, logistics, and marketplace/platform dynamics
-- Technology transitions and how they reshape industries and professional roles
-- Data-driven decision making and experimentation
-
-Analyze the provided content (podcast transcript or newsletter) and return a JSON object with exactly these keys:
-
-{
-  "one_liner": "Single sentence capturing the core thesis — helps decide in 5 seconds whether to read further.",
-  "concepts_discussed": ["short label 3-6 words", "..."],
-  "key_concepts": [
-    {
-      "name": "Short memorable label 3-6 words",
-      "summary": "2-3 sentences explaining the idea.",
-      "why_it_matters": "One sentence connecting to product management, business strategy, or technology leadership."
-    }
-  ],
-  "mental_models": [
-    {
-      "name": "Model or framework name",
-      "how_it_works": "Brief explanation of the model's logic or structure.",
-      "application": "How this model can be applied to product decisions, business strategy, or operational thinking."
-    }
-  ],
-  "quotable_lines": [
-    {
-      "quote": "Exact quote or close paraphrase",
-      "speaker": "Speaker name or null",
-      "context": "Brief note on why it resonates or what it crystallizes."
-    }
-  ],
-  "career_relevance": [
-    "Specific bullet connecting content to PM leadership, platform thinking, supply chain, data/AI strategy, or competitive positioning."
-  ],
-  "verdict": {
-    "novelty": 4,
-    "actionability": 3,
-    "depth": "Deep read",
-    "best_sections": "Description of specific parts worth revisiting, or null."
-  }
-}
-
-Guidelines:
-- concepts_discussed: ordered by prominence, not alphabetically. Use as a scannable table of contents.
-- key_concepts: 3-7 concepts depending on content density.
-- mental_models: extract explicit or implicit frameworks. Map to known frameworks (Aggregation Theory, Jobs to Be Done, Wardley Mapping, disruption theory, network effects, platform dynamics) where applicable. Use [] if none are present — do not force-fit.
-- quotable_lines: prioritize pithy, contrarian, or insight-crystallizing lines. Aim for 2-5.
-- career_relevance: be specific — not "relevant to PMs" but how and where it applies.
-- verdict.novelty: 1-5 (1=rehash of known ideas, 5=genuinely new thinking).
-- verdict.actionability: 1-5 (1=purely abstract, 5=directly applicable to current work).
-- verdict.depth: one of "Skim" | "Read key sections" | "Deep read" | "Reference material — save for later".
-- Be concise. Lead with the insight, not narration. Preserve original speaker terminology for technical concepts.
-- If content is thin or repetitive, say so honestly in the verdict. Do not inflate.
-- Return valid JSON only. No markdown fences, no explanatory text outside the JSON object."""
+from .prompts import get_prompt_for_podcast
 
 from .database import P3Database
 
@@ -251,6 +193,9 @@ Transcript:
     def generate_summary(self, episode_id: int) -> Dict[str, Any]:
         """Generate structured summary of an episode."""
         try:
+            episode = self.db.get_episode_by_id(episode_id)
+            podcast_name = episode['podcast_title'] if episode else ''
+
             segments = self.db.get_transcripts_for_episode(episode_id)
             full_text = "\n".join(segment['text'] for segment in segments)
 
@@ -258,7 +203,7 @@ Transcript:
                 return None
 
             cleaned_text = self.clean_transcript(full_text)
-            summary_data = self._generate_structured_summary(cleaned_text)
+            summary_data = self._generate_structured_summary(cleaned_text, podcast_name)
 
             if summary_data:
                 quotes = [
@@ -284,20 +229,22 @@ Transcript:
             self.db.add_error(episode_id, 'digest', e)
             return None
 
-    def _generate_structured_summary(self, text: str) -> Optional[Dict[str, Any]]:
-        """Generate structured summary using LLM."""
+    def _generate_structured_summary(self, text: str, podcast_name: str = '') -> Optional[Dict[str, Any]]:
+        """Generate structured summary using LLM, routing prompt by podcast name."""
+        system_prompt = get_prompt_for_podcast(podcast_name)
+
         if not self.api_key and self.llm_provider != "ollama":
             return self._basic_extraction(text)
 
         try:
             if self.llm_provider == "openai":
-                result = self._openai_extract(text)
+                result = self._openai_extract(text, system_prompt)
             elif self.llm_provider == "anthropic":
-                result = self._anthropic_extract(text)
+                result = self._anthropic_extract(text, system_prompt)
             elif self.llm_provider == "ollama":
-                result = self._ollama_extract(text)
+                result = self._ollama_extract(text, system_prompt)
             elif self.llm_provider == "gemini":
-                result = self._gemini_extract(text)
+                result = self._gemini_extract(text, system_prompt)
             else:
                 result = None
         except Exception as e:
@@ -306,7 +253,7 @@ Transcript:
 
         return result if result is not None else self._basic_extraction(text)
 
-    def _openai_extract(self, text: str) -> Optional[Dict[str, Any]]:
+    def _openai_extract(self, text: str, system_prompt: str) -> Optional[Dict[str, Any]]:
         """Extract structured summary using OpenAI API."""
         with httpx.Client(timeout=120.0) as client:
             response = client.post(
@@ -318,7 +265,7 @@ Transcript:
                 json={
                     "model": self.llm_model,
                     "messages": [
-                        {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": f"Transcript:\n{text}"}
                     ],
                     "temperature": 0.2,
@@ -335,7 +282,7 @@ Transcript:
 
         return None
 
-    def _anthropic_extract(self, text: str) -> Optional[Dict[str, Any]]:
+    def _anthropic_extract(self, text: str, system_prompt: str) -> Optional[Dict[str, Any]]:
         """Extract structured summary using Anthropic Claude API."""
         if not ANTHROPIC_AVAILABLE:
             print("anthropic package not installed. Run: pip install anthropic")
@@ -346,7 +293,7 @@ Transcript:
             message = client.messages.create(
                 model=self.llm_model,
                 max_tokens=2000,
-                system=SUMMARY_SYSTEM_PROMPT,
+                system=system_prompt,
                 messages=[{"role": "user", "content": f"Transcript:\n{text}"}]
             )
             content = message.content[0].text.strip()
@@ -359,7 +306,7 @@ Transcript:
             print(f"Anthropic extraction failed: {e}")
             return None
 
-    def _ollama_extract(self, text: str) -> Optional[Dict[str, Any]]:
+    def _ollama_extract(self, text: str, system_prompt: str) -> Optional[Dict[str, Any]]:
         """Extract structured summary using Ollama local LLM."""
         if not OLLAMA_AVAILABLE:
             print("Ollama not available, using basic extraction")
@@ -369,7 +316,7 @@ Transcript:
             response = ollama.chat(
                 model=self.llm_model,
                 messages=[
-                    {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Transcript:\n{text}"}
                 ]
             )
@@ -412,7 +359,7 @@ Transcript:
             print(f"Gemini cleaning failed: {e}")
             return text
 
-    def _gemini_extract(self, text: str) -> Optional[Dict[str, Any]]:
+    def _gemini_extract(self, text: str, system_prompt: str) -> Optional[Dict[str, Any]]:
         """Extract structured summary using Google Gemini API."""
         if not GEMINI_AVAILABLE:
             print("google-genai package not installed. Run: pip install google-genai")
@@ -420,7 +367,7 @@ Transcript:
 
         try:
             client = google_genai.Client(api_key=self.api_key)
-            full_prompt = f"{SUMMARY_SYSTEM_PROMPT}\n\nTranscript:\n{text}"
+            full_prompt = f"{system_prompt}\n\nTranscript:\n{text}"
             response = client.models.generate_content(
                 model=self.llm_model,
                 contents=full_prompt,

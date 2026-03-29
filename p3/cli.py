@@ -123,6 +123,7 @@ def transcribe(ctx, model, episode_id):
         parakeet_model=settings.get('parakeet_model', 'mlx-community/parakeet-tdt-0.6b-v2'),
         transcription_provider=transcription_provider,
         cleanup_audio=cleanup_audio,
+        parakeet_chunk_duration=settings.get('parakeet_chunk_duration', 600),
     )
     
     if episode_id:
@@ -686,6 +687,7 @@ def run(ctx, max_episodes, output_dir):
         parakeet_model=settings.get('parakeet_model', 'mlx-community/parakeet-tdt-0.6b-v2'),
         transcription_provider=transcription_provider,
         cleanup_audio=settings.get('cleanup_old_files', False),
+        parakeet_chunk_duration=settings.get('parakeet_chunk_duration', 600),
     )
     episodes_to_transcribe = db.get_episodes_by_status('downloaded')
     if not episodes_to_transcribe:

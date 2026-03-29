@@ -29,7 +29,8 @@ class AudioTranscriber:
                  parakeet_model: str = "mlx-community/parakeet-tdt-0.6b-v2",
                  transcription_provider: str = "local",
                  openai_api_key: str = None,
-                 cleanup_audio: bool = False):
+                 cleanup_audio: bool = False,
+                 parakeet_chunk_duration: int = 600):
         self.db = db
         self.whisper_model = whisper_model
         self.use_parakeet = use_parakeet
@@ -37,6 +38,7 @@ class AudioTranscriber:
         self.transcription_provider = transcription_provider
         self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
         self.cleanup_audio = cleanup_audio
+        self.parakeet_chunk_duration = parakeet_chunk_duration
         self.whisper = None
         self.parakeet = None
         
@@ -95,30 +97,35 @@ class AudioTranscriber:
         if not PARAKEET_AVAILABLE:
             print("Parakeet MLX not available, falling back to Whisper")
             return self.transcribe_with_whisper(audio_path)
-        
+
         self._load_parakeet()
-        
+
         try:
-            result = self.parakeet.transcribe(audio_path)
-            
-            # Convert Parakeet output to our format
+            # chunk_duration splits long files into GPU-safe segments.
+            # Default 600s (10 min) keeps Metal memory well under 9.5 GB limit.
+            result = self.parakeet.transcribe(
+                audio_path,
+                chunk_duration=self.parakeet_chunk_duration,
+                overlap_duration=15.0,
+            )
+
             segments = []
             for sentence in result.sentences:
                 segments.append({
                     'start': sentence.start,
                     'end': sentence.end,
                     'text': sentence.text.strip(),
-                    'speaker': None,  # Parakeet doesn't do speaker identification
-                    'confidence': 1.0  # Parakeet doesn't provide confidence scores
+                    'speaker': None,
+                    'confidence': 1.0
                 })
-            
+
             return {
                 'segments': segments,
-                'language': 'en',  # Parakeet is English-only
+                'language': 'en',
                 'text': result.text,
                 'provider': 'parakeet-mlx'
             }
-            
+
         except Exception as e:
             print(f"Parakeet transcription failed: {e}")
             print("Falling back to Whisper")
